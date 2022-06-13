@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="zh"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MultinomialLogisticRegression.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">JPMML-LightGBM</a> &gt; <a href="index.source.html" class="el_package">org.jpmml.lightgbm</a> &gt; <span class="el_source">MultinomialLogisticRegression.java</span></div><h1>MultinomialLogisticRegression.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (c) 2017 Villu Ruusmann
+ *
+ * This file is part of JPMML-LightGBM
+ *
+ * JPMML-LightGBM is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * JPMML-LightGBM is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with JPMML-LightGBM.  If not, see &lt;http://www.gnu.org/licenses/&gt;.
+ */
+package org.jpmml.lightgbm;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.dmg.pmml.DataType;
+import org.dmg.pmml.OpType;
+import org.dmg.pmml.mining.MiningModel;
+import org.dmg.pmml.regression.RegressionModel;
+import org.jpmml.converter.CategoricalLabel;
+import org.jpmml.converter.FieldNameUtil;
+import org.jpmml.converter.FortranMatrixUtil;
+import org.jpmml.converter.ModelUtil;
+import org.jpmml.converter.Schema;
+import org.jpmml.converter.mining.MiningModelUtil;
+
+public class MultinomialLogisticRegression extends Classification {
+
+	public MultinomialLogisticRegression(boolean average_output, int num_class){
+<span class="fc" id="L38">		super(average_output, num_class);</span>
+
+<span class="pc bpc" id="L40" title="1 of 2 branches missed.">		if(num_class &lt; 3){</span>
+<span class="nc" id="L41">			throw new IllegalArgumentException(&quot;Multi-class classification requires three or more target categories&quot;);</span>
+		}
+<span class="fc" id="L43">	}</span>
+
+	@Override
+	public MiningModel encodeMiningModel(List&lt;Tree&gt; trees, Integer numIteration, Schema schema){
+<span class="fc" id="L47">		Schema segmentSchema = schema.toAnonymousRegressorSchema(DataType.DOUBLE);</span>
+
+<span class="fc" id="L49">		List&lt;MiningModel&gt; miningModels = new ArrayList&lt;&gt;();</span>
+
+<span class="fc" id="L51">		CategoricalLabel categoricalLabel = (CategoricalLabel)schema.getLabel();</span>
+
+<span class="fc bfc" id="L53" title="All 2 branches covered.">		for(int i = 0, rows = categoricalLabel.size(), columns = (trees.size() / rows); i &lt; rows; i++){</span>
+<span class="fc" id="L54">			MiningModel miningModel = createMiningModel(FortranMatrixUtil.getRow(trees, rows, columns, i), numIteration, segmentSchema)</span>
+<span class="fc" id="L55">				.setOutput(ModelUtil.createPredictedOutput(FieldNameUtil.create(&quot;lgbmValue&quot;, categoricalLabel.getValue(i)), OpType.CONTINUOUS, DataType.DOUBLE));</span>
+
+<span class="fc" id="L57">			miningModels.add(miningModel);</span>
+		}
+
+<span class="fc" id="L60">		return MiningModelUtil.createClassification(miningModels, RegressionModel.NormalizationMethod.SOFTMAX, true, schema);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.6.202009150832</span></div></body></html>

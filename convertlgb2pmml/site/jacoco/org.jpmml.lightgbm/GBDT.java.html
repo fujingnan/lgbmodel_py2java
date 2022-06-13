@@ -1,0 +1,618 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="zh"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>GBDT.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">JPMML-LightGBM</a> &gt; <a href="index.source.html" class="el_package">org.jpmml.lightgbm</a> &gt; <span class="el_source">GBDT.java</span></div><h1>GBDT.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (c) 2017 Villu Ruusmann
+ *
+ * This file is part of JPMML-LightGBM
+ *
+ * JPMML-LightGBM is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * JPMML-LightGBM is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with JPMML-LightGBM.  If not, see &lt;http://www.gnu.org/licenses/&gt;.
+ */
+package org.jpmml.lightgbm;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+import org.dmg.pmml.DataField;
+import org.dmg.pmml.DataType;
+import org.dmg.pmml.FieldName;
+import org.dmg.pmml.Interval;
+import org.dmg.pmml.InvalidValueTreatmentMethod;
+import org.dmg.pmml.OpType;
+import org.dmg.pmml.PMML;
+import org.dmg.pmml.Visitor;
+import org.dmg.pmml.mining.MiningModel;
+import org.jpmml.converter.BinaryFeature;
+import org.jpmml.converter.BooleanFeature;
+import org.jpmml.converter.CategoricalFeature;
+import org.jpmml.converter.ContinuousFeature;
+import org.jpmml.converter.Feature;
+import org.jpmml.converter.ImportanceDecorator;
+import org.jpmml.converter.InvalidValueDecorator;
+import org.jpmml.converter.Label;
+import org.jpmml.converter.ModelEncoder;
+import org.jpmml.converter.Schema;
+import org.jpmml.converter.SchemaUtil;
+import org.jpmml.converter.TypeUtil;
+import org.jpmml.converter.WildcardFeature;
+import org.jpmml.converter.visitors.NaNAsMissingDecorator;
+import org.jpmml.lightgbm.visitors.TreeModelCompactor;
+
+<span class="fc" id="L55">public class GBDT {</span>
+
+	private String version;
+
+	private int max_feature_idx_;
+
+	private int label_idx_;
+
+	private String[] feature_names_;
+
+	private String[] feature_infos_;
+
+	private ObjectiveFunction object_function_;
+
+	private Tree[] models_;
+
+<span class="fc" id="L71">	private Map&lt;String, String&gt; feature_importances = Collections.emptyMap();</span>
+
+<span class="fc" id="L73">	private List&lt;List&lt;Object&gt;&gt; pandas_categorical = Collections.emptyList();</span>
+
+
+	public void load(List&lt;Section&gt; sections){
+<span class="fc" id="L77">		int index = 0;</span>
+
+		if(true){
+<span class="fc" id="L80">			Section section = sections.get(index);</span>
+
+<span class="pc bpc" id="L82" title="1 of 2 branches missed.">			if(!section.checkId(&quot;tree&quot;)){</span>
+<span class="nc" id="L83">				throw new IllegalArgumentException();</span>
+			}
+
+<span class="fc" id="L86">			this.version = section.getString(&quot;version&quot;);</span>
+<span class="pc bpc" id="L87" title="1 of 2 branches missed.">			if(this.version != null){</span>
+
+<span class="pc bpc" id="L89" title="1 of 2 branches missed.">				switch(this.version){</span>
+					case &quot;v2&quot;:
+					case &quot;v3&quot;:
+<span class="fc" id="L92">						break;</span>
+					default:
+<span class="nc" id="L94">						throw new IllegalArgumentException(&quot;Version &quot; + this.version + &quot; is not supported&quot;);</span>
+				}
+			}
+
+<span class="fc" id="L98">			this.max_feature_idx_ = section.getInt(&quot;max_feature_idx&quot;);</span>
+<span class="fc" id="L99">			this.label_idx_ = section.getInt(&quot;label_index&quot;);</span>
+<span class="fc" id="L100">			this.feature_names_ = section.getStringArray(&quot;feature_names&quot;, this.max_feature_idx_ + 1);</span>
+<span class="fc" id="L101">			this.feature_infos_ = section.getStringArray(&quot;feature_infos&quot;, this.max_feature_idx_ + 1);</span>
+
+<span class="fc" id="L103">			this.object_function_ = loadObjectiveFunction(section);</span>
+
+<span class="fc" id="L105">			index++;</span>
+		}
+
+<span class="fc" id="L108">		List&lt;Tree&gt; trees = new ArrayList&lt;&gt;();</span>
+
+<span class="pc bpc" id="L110" title="1 of 2 branches missed.">		while(index &lt; sections.size()){</span>
+<span class="fc" id="L111">			Section section = sections.get(index);</span>
+
+<span class="fc" id="L113">			String treeId = &quot;Tree=&quot; + String.valueOf(index - 1);</span>
+
+<span class="fc bfc" id="L115" title="All 2 branches covered.">			if(!section.checkId(treeId)){</span>
+<span class="fc" id="L116">				break;</span>
+			}
+
+<span class="fc" id="L119">			Tree tree = new Tree();</span>
+<span class="fc" id="L120">			tree.load(section);</span>
+
+<span class="fc" id="L122">			trees.add(tree);</span>
+
+<span class="fc" id="L124">			index++;</span>
+<span class="fc" id="L125">		}</span>
+
+<span class="fc" id="L127">		this.models_ = trees.toArray(new Tree[trees.size()]);</span>
+
+<span class="fc" id="L129">		index = skipEndSection(&quot;end of trees&quot;, sections, index);</span>
+
+		feature_importances:
+<span class="pc bpc" id="L132" title="1 of 2 branches missed.">		if(index &lt; sections.size()){</span>
+<span class="fc" id="L133">			Section section = sections.get(index);</span>
+
+<span class="pc bpc" id="L135" title="2 of 4 branches missed.">			if(!section.checkId(&quot;feature importances:&quot;) &amp;&amp; !section.checkId(&quot;feature_importances:&quot;)){</span>
+<span class="nc" id="L136">				break feature_importances;</span>
+			}
+
+<span class="fc" id="L139">			this.feature_importances = loadFeatureSection(section);</span>
+
+<span class="fc" id="L141">			index++;</span>
+		}
+
+		parameters:
+<span class="pc bpc" id="L145" title="1 of 2 branches missed.">		if(index &lt; sections.size()){</span>
+<span class="fc" id="L146">			Section section = sections.get(index);</span>
+
+<span class="pc bpc" id="L148" title="1 of 2 branches missed.">			if(!section.checkId(&quot;parameters:&quot;)){</span>
+<span class="nc" id="L149">				break parameters;</span>
+			}
+
+<span class="fc" id="L152">			index++;</span>
+
+<span class="fc" id="L154">			index = skipEndSection(&quot;end of parameters&quot;, sections, index);</span>
+		}
+
+		pandas_categorical:
+<span class="pc bpc" id="L158" title="1 of 2 branches missed.">		if(index &lt; sections.size()){</span>
+<span class="fc" id="L159">			Section section = sections.get(index);</span>
+
+<span class="pc bpc" id="L161" title="1 of 2 branches missed.">			if(!section.checkId(id -&gt; id.startsWith(&quot;pandas_categorical:&quot;))){</span>
+<span class="nc" id="L162">				break pandas_categorical;</span>
+			}
+
+<span class="fc" id="L165">			this.pandas_categorical = loadPandasCategorical(section);</span>
+
+<span class="fc" id="L167">			index++;</span>
+		}
+<span class="fc" id="L169">	}</span>
+
+	public Schema encodeSchema(FieldName targetField, List&lt;String&gt; targetCategories, LightGBMEncoder encoder){
+		Label label;
+
+		{
+<span class="pc bpc" id="L175" title="1 of 2 branches missed.">			if(targetField == null){</span>
+<span class="fc" id="L176">				targetField = FieldName.create(&quot;_target&quot;);</span>
+			}
+
+<span class="fc" id="L179">			label = this.object_function_.encodeLabel(targetField, targetCategories, encoder);</span>
+		}
+
+<span class="fc" id="L182">		List&lt;Feature&gt; features = new ArrayList&lt;&gt;();</span>
+
+<span class="fc bfc" id="L184" title="All 2 branches covered.">		boolean hasPandasCategories = (this.pandas_categorical.size() &gt; 0);</span>
+
+<span class="fc" id="L186">		int pandasCategoryIndex = 0;</span>
+
+<span class="fc" id="L188">		String[] featureNames = this.feature_names_;</span>
+<span class="fc" id="L189">		String[] featureInfos = this.feature_infos_;</span>
+
+<span class="pc bpc" id="L191" title="1 of 2 branches missed.">		if(featureNames.length != featureInfos.length){</span>
+<span class="nc" id="L192">			throw new IllegalArgumentException();</span>
+		}
+
+<span class="fc bfc" id="L195" title="All 2 branches covered.">		for(int i = 0; i &lt; featureNames.length; i++){</span>
+<span class="fc" id="L196">			String featureName = featureNames[i];</span>
+<span class="fc" id="L197">			String featureInfo = featureInfos[i];</span>
+
+<span class="fc bfc" id="L199" title="All 2 branches covered.">			if(LightGBMUtil.isNone(featureInfo)){</span>
+<span class="fc" id="L200">				features.add(null);</span>
+
+<span class="pc bpc" id="L202" title="1 of 2 branches missed.">				if(hasPandasCategories){</span>
+<span class="nc" id="L203">					pandasCategoryIndex++;</span>
+				}
+
+				continue;
+			}
+
+<span class="fc" id="L209">			Boolean binary = isBinary(i);</span>
+<span class="pc bpc" id="L210" title="1 of 2 branches missed.">			if(binary == null){</span>
+<span class="nc" id="L211">				binary = Boolean.FALSE;</span>
+			}
+
+<span class="fc" id="L214">			Boolean categorical = isCategorical(i);</span>
+<span class="fc bfc" id="L215" title="All 2 branches covered.">			if(categorical == null){</span>
+<span class="fc" id="L216">				categorical = LightGBMUtil.isValues(featureInfo);</span>
+			}
+
+<span class="fc" id="L219">			FieldName activeField = FieldName.create(featureNames[i]);</span>
+
+<span class="fc bfc" id="L221" title="All 2 branches covered.">			if(categorical){</span>
+
+<span class="pc bpc" id="L223" title="1 of 2 branches missed.">				if(binary){</span>
+<span class="nc" id="L224">					throw new IllegalArgumentException();</span>
+				} else
+
+				{
+					Feature feature;
+
+<span class="fc bfc" id="L230" title="All 2 branches covered.">					if(hasPandasCategories){</span>
+<span class="fc" id="L231">						List&lt;?&gt; values = this.pandas_categorical.get(pandasCategoryIndex);</span>
+
+<span class="fc" id="L233">						DataType dataType = TypeUtil.getDataType(values);</span>
+
+<span class="fc" id="L235">						DataField dataField = encoder.createDataField(activeField, OpType.CATEGORICAL, dataType, values);</span>
+
+<span class="pc bpc" id="L237" title="1 of 4 branches missed.">						if((DataType.BOOLEAN).equals(dataType) &amp;&amp; (BooleanFeature.VALUES).equals(values)){</span>
+<span class="fc" id="L238">							feature = new BooleanFeature(encoder, dataField);</span>
+						} else
+
+						{
+<span class="fc" id="L242">							feature = new CategoricalFeature(encoder, dataField);</span>
+						}
+
+<span class="fc" id="L245">						pandasCategoryIndex++;</span>
+<span class="fc" id="L246">					} else</span>
+
+					{
+<span class="fc" id="L249">						List&lt;Integer&gt; values = LightGBMUtil.parseValues(featureInfo).stream()</span>
+<span class="fc bfc" id="L250" title="All 2 branches covered.">							.filter(value -&gt; value != GBDT.CATEGORY_MISSING)</span>
+<span class="fc" id="L251">							.sorted()</span>
+<span class="fc" id="L252">							.collect(Collectors.toList());</span>
+
+<span class="fc" id="L254">						DataField dataField = encoder.createDataField(activeField, OpType.CATEGORICAL, DataType.INTEGER, values);</span>
+
+<span class="fc" id="L256">						feature = new DirectCategoricalFeature(encoder, dataField);</span>
+					}
+
+<span class="fc" id="L259">					features.add(feature);</span>
+				}
+
+<span class="fc" id="L262">				encoder.addDecorator(activeField, new InvalidValueDecorator(InvalidValueTreatmentMethod.AS_MISSING, null));</span>
+			} else
+
+			{
+<span class="pc bpc" id="L266" title="1 of 2 branches missed.">				if(binary){</span>
+<span class="nc" id="L267">					DataField dataField = encoder.createDataField(activeField, OpType.CATEGORICAL, DataType.INTEGER, Arrays.asList(0, 1));</span>
+
+<span class="nc" id="L269">					features.add(new BinaryFeature(encoder, dataField, 1));</span>
+<span class="nc" id="L270">				} else</span>
+
+				{
+<span class="fc" id="L273">					DataField dataField = encoder.createDataField(activeField, OpType.CONTINUOUS, DataType.DOUBLE);</span>
+
+<span class="fc" id="L275">					Interval interval = LightGBMUtil.parseInterval(featureInfo);</span>
+<span class="pc bpc" id="L276" title="1 of 2 branches missed.">					if(interval != null){</span>
+<span class="fc" id="L277">						dataField.addIntervals(interval);</span>
+					}
+
+<span class="fc" id="L280">					features.add(new ContinuousFeature(encoder, dataField));</span>
+				}
+
+<span class="fc" id="L283">				encoder.addDecorator(activeField, new InvalidValueDecorator(InvalidValueTreatmentMethod.AS_IS, null));</span>
+			}
+
+<span class="fc" id="L286">			Double importance = getFeatureImportance(featureName);</span>
+<span class="fc bfc" id="L287" title="All 2 branches covered.">			if(importance != null){</span>
+<span class="fc" id="L288">				encoder.addDecorator(activeField, new ImportanceDecorator(importance));</span>
+			}
+		}
+
+<span class="fc bfc" id="L292" title="All 2 branches covered.">		if(hasPandasCategories){</span>
+
+<span class="pc bpc" id="L294" title="1 of 2 branches missed.">			if(pandasCategoryIndex != this.pandas_categorical.size()){</span>
+<span class="nc" id="L295">				throw new IllegalArgumentException();</span>
+			}
+		}
+
+<span class="fc" id="L299">		return new Schema(encoder, label, features);</span>
+	}
+
+	public Schema toLightGBMSchema(Schema schema){
+<span class="fc" id="L303">		String[] featureNames = this.feature_names_;</span>
+<span class="fc" id="L304">		String[] featureInfos = this.feature_infos_;</span>
+
+<span class="fc" id="L306">		Function&lt;Feature, Feature&gt; function = new Function&lt;Feature, Feature&gt;(){</span>
+
+<span class="fc" id="L308">			private ModelEncoder encoder = (ModelEncoder)schema.getEncoder();</span>
+
+<span class="fc" id="L310">			private List&lt;? extends Feature&gt; features = schema.getFeatures();</span>
+
+			{
+<span class="fc" id="L313">				SchemaUtil.checkSize(featureNames.length, this.features);</span>
+<span class="fc" id="L314">				SchemaUtil.checkSize(featureInfos.length, this.features);</span>
+<span class="fc" id="L315">			}</span>
+
+			@Override
+			public Feature apply(Feature feature){
+<span class="fc" id="L319">				int index = this.features.indexOf(feature);</span>
+<span class="pc bpc" id="L320" title="1 of 2 branches missed.">				if(index &lt; 0){</span>
+<span class="nc" id="L321">					throw new IllegalArgumentException();</span>
+				}
+
+<span class="fc" id="L324">				String featureName = featureNames[index];</span>
+<span class="fc" id="L325">				String featureInfo = featureInfos[index];</span>
+
+<span class="fc" id="L327">				Double importance = getFeatureImportance(featureName);</span>
+<span class="fc bfc" id="L328" title="All 2 branches covered.">				if(importance != null){</span>
+<span class="fc" id="L329">					this.encoder.addFeatureImportance(feature, importance);</span>
+				} // End if
+
+<span class="fc bfc" id="L332" title="All 2 branches covered.">				if(feature instanceof BinaryFeature){</span>
+<span class="fc" id="L333">					BinaryFeature binaryFeature = (BinaryFeature)feature;</span>
+
+<span class="fc" id="L335">					Boolean binary = isBinary(index);</span>
+<span class="pc bpc" id="L336" title="2 of 4 branches missed.">					if(binary != null &amp;&amp; binary.booleanValue()){</span>
+<span class="nc" id="L337">						return binaryFeature;</span>
+					}
+
+<span class="fc" id="L340">					Boolean categorical = isCategorical(index);</span>
+<span class="fc bfc" id="L341" title="All 4 branches covered.">					if(categorical != null &amp;&amp; categorical.booleanValue()){</span>
+<span class="fc" id="L342">						CategoricalFeature categoricalFeature = new BinaryCategoricalFeature(this.encoder, binaryFeature);</span>
+
+<span class="fc" id="L344">						return categoricalFeature;</span>
+					}
+<span class="fc" id="L346">				} else</span>
+
+<span class="pc bpc" id="L348" title="1 of 2 branches missed.">				if(feature instanceof CategoricalFeature){</span>
+<span class="nc" id="L349">					CategoricalFeature categoricalFeature = (CategoricalFeature)feature;</span>
+
+<span class="nc" id="L351">					Boolean categorical = isCategorical(index);</span>
+<span class="nc bnc" id="L352" title="All 4 branches missed.">					if(categorical != null &amp;&amp; categorical.booleanValue()){</span>
+<span class="nc" id="L353">						return categoricalFeature;</span>
+					}
+<span class="nc" id="L355">				} else</span>
+
+<span class="pc bpc" id="L357" title="1 of 2 branches missed.">				if(feature instanceof WildcardFeature){</span>
+<span class="nc" id="L358">					WildcardFeature wildcardFeature = (WildcardFeature)feature;</span>
+
+<span class="nc" id="L360">					Boolean binary = isBinary(index);</span>
+<span class="nc bnc" id="L361" title="All 4 branches missed.">					if(binary != null &amp;&amp; binary.booleanValue()){</span>
+<span class="nc" id="L362">						wildcardFeature.toCategoricalFeature(Arrays.asList(0, 1));</span>
+
+<span class="nc" id="L364">						BinaryFeature binaryFeature = new BinaryFeature(this.encoder, wildcardFeature, 1);</span>
+
+<span class="nc" id="L366">						return binaryFeature;</span>
+					}
+				}
+
+<span class="fc" id="L370">				return feature.toContinuousFeature();</span>
+			}
+		};
+
+<span class="fc" id="L374">		return schema.toTransformedSchema(function);</span>
+	}
+
+	public PMML encodePMML(Map&lt;String, ?&gt; options, FieldName targetField, List&lt;String&gt; targetCategories){
+<span class="fc" id="L378">		LightGBMEncoder encoder = new LightGBMEncoder();</span>
+
+<span class="fc" id="L380">		Boolean nanAsMissing = (Boolean)options.get(HasLightGBMOptions.OPTION_NAN_AS_MISSING);</span>
+
+<span class="fc" id="L382">		Schema schema = encodeSchema(targetField, targetCategories, encoder);</span>
+
+<span class="fc" id="L384">		MiningModel miningModel = encodeMiningModel(options, schema);</span>
+
+<span class="fc" id="L386">		PMML pmml = encoder.encodePMML(miningModel);</span>
+
+<span class="pc bpc" id="L388" title="1 of 2 branches missed.">		if((Boolean.TRUE).equals(nanAsMissing)){</span>
+<span class="fc" id="L389">			Visitor visitor = new NaNAsMissingDecorator();</span>
+
+<span class="fc" id="L391">			visitor.applyTo(pmml);</span>
+		}
+
+<span class="fc" id="L394">		return pmml;</span>
+	}
+
+	public MiningModel encodeMiningModel(Map&lt;String, ?&gt; options, Schema schema){
+<span class="fc" id="L398">		Boolean compact = (Boolean)options.get(HasLightGBMOptions.OPTION_COMPACT);</span>
+<span class="fc" id="L399">		Integer numIterations = (Integer)options.get(HasLightGBMOptions.OPTION_NUM_ITERATION);</span>
+
+<span class="fc" id="L401">		MiningModel miningModel = this.object_function_.encodeMiningModel(Arrays.asList(this.models_), numIterations, schema)</span>
+<span class="fc" id="L402">			.setAlgorithmName(&quot;LightGBM&quot;);</span>
+
+<span class="fc bfc" id="L404" title="All 2 branches covered.">		if((Boolean.TRUE).equals(compact)){</span>
+<span class="fc" id="L405">			Visitor visitor = new TreeModelCompactor();</span>
+
+<span class="fc" id="L407">			visitor.applyTo(miningModel);</span>
+		}
+
+<span class="fc" id="L410">		return miningModel;</span>
+	}
+
+	public String[] getFeatureNames(){
+<span class="fc" id="L414">		return this.feature_names_;</span>
+	}
+
+	public String[] getFeatureInfos(){
+<span class="nc" id="L418">		return this.feature_infos_;</span>
+	}
+
+	private Boolean isBinary(int feature){
+<span class="fc" id="L422">		String featureInfo = this.feature_infos_[feature];</span>
+
+<span class="fc bfc" id="L424" title="All 2 branches covered.">		if(!LightGBMUtil.isBinaryInterval(featureInfo)){</span>
+<span class="fc" id="L425">			return Boolean.FALSE;</span>
+		}
+
+<span class="fc" id="L428">		Boolean result = null;</span>
+
+<span class="fc" id="L430">		Tree[] trees = this.models_;</span>
+<span class="pc bpc" id="L431" title="1 of 2 branches missed.">		for(Tree tree : trees){</span>
+<span class="fc" id="L432">			Boolean binary = tree.isBinary(feature);</span>
+
+<span class="fc bfc" id="L434" title="All 2 branches covered.">			if(binary != null){</span>
+
+<span class="pc bpc" id="L436" title="1 of 2 branches missed.">				if(!binary.booleanValue()){</span>
+<span class="fc" id="L437">					return Boolean.FALSE;</span>
+				}
+
+<span class="nc" id="L440">				result = Boolean.TRUE;</span>
+			}
+		}
+
+<span class="nc" id="L444">		return result;</span>
+	}
+
+	private Boolean isCategorical(int feature){
+<span class="fc" id="L448">		String featureInfo = this.feature_infos_[feature];</span>
+
+<span class="fc bfc" id="L450" title="All 2 branches covered.">		if(!LightGBMUtil.isValues(featureInfo)){</span>
+<span class="fc" id="L451">			return Boolean.FALSE;</span>
+		}
+
+<span class="fc" id="L454">		Boolean result = null;</span>
+
+<span class="fc" id="L456">		Tree[] trees = this.models_;</span>
+<span class="fc bfc" id="L457" title="All 2 branches covered.">		for(Tree tree: trees){</span>
+<span class="fc" id="L458">			Boolean categorical = tree.isCategorical(feature);</span>
+
+<span class="fc bfc" id="L460" title="All 2 branches covered.">			if(categorical != null){</span>
+
+<span class="pc bpc" id="L462" title="1 of 2 branches missed.">				if(!categorical.booleanValue()){</span>
+<span class="nc" id="L463">					return Boolean.FALSE;</span>
+				}
+
+<span class="fc" id="L466">				result = Boolean.TRUE;</span>
+			}
+		}
+
+<span class="fc" id="L470">		return result;</span>
+	}
+
+	private Double getFeatureImportance(String featureName){
+<span class="fc" id="L474">		String value = this.feature_importances.get(featureName);</span>
+
+<span class="fc bfc" id="L476" title="All 2 branches covered.">		return (value != null ? Double.valueOf(value) : null);</span>
+	}
+
+	static
+	private ObjectiveFunction loadObjectiveFunction(Section section){
+<span class="fc" id="L481">		String[] tokens = section.getStringArray(&quot;objective&quot;, -1);</span>
+<span class="pc bpc" id="L482" title="1 of 2 branches missed.">		if(tokens.length == 0){</span>
+<span class="nc" id="L483">			throw new IllegalArgumentException();</span>
+		}
+
+<span class="fc" id="L486">		boolean average_output = section.containsKey(&quot;average_output&quot;);</span>
+
+<span class="fc" id="L488">		String objective = tokens[0];</span>
+
+<span class="fc" id="L490">		Section config = new Section();</span>
+
+<span class="fc bfc" id="L492" title="All 2 branches covered.">		if(tokens.length &gt; 1){</span>
+
+<span class="fc bfc" id="L494" title="All 2 branches covered.">			for(int i = 1; i &lt; tokens.length; i++){</span>
+<span class="fc" id="L495">				config.put(tokens[i], ':');</span>
+			}
+		}
+
+<span class="fc" id="L499">		objective = parseObjectiveAlias(objective.toLowerCase());</span>
+
+<span class="pc bpc" id="L501" title="2 of 7 branches missed.">		switch(objective){</span>
+			// RegressionL2loss
+			case &quot;regression&quot;:
+			// RegressionL1loss
+			case &quot;regression_l1&quot;:
+			// RegressionHuberLoss
+			case &quot;huber&quot;:
+			// RegressionFairLoss
+			case &quot;fair&quot;:
+			// RegressionQuantileloss
+			case &quot;quantile&quot;:
+<span class="fc" id="L512">				return new Regression(average_output);</span>
+			// RegressionPoissonLoss
+			case &quot;poisson&quot;:
+			// RegressionGammaLoss
+			case &quot;gamma&quot;:
+			// RegressionTweedieLoss
+			case &quot;tweedie&quot;:
+<span class="fc" id="L519">				return new PoissonRegression(average_output);</span>
+			// LambdarankNDCG
+			case &quot;lambdarank&quot;:
+<span class="nc" id="L522">				return new Lambdarank(average_output);</span>
+			// BinaryLogloss
+			case &quot;binary&quot;:
+<span class="fc" id="L525">				return new BinomialLogisticRegression(average_output, config.getDouble(&quot;sigmoid&quot;));</span>
+			// CrossEntropy
+			case &quot;cross_entropy&quot;:
+<span class="fc" id="L528">				return new BinomialLogisticRegression(average_output, 1d);</span>
+			// MulticlassSoftmax
+			case &quot;multiclass&quot;:
+<span class="fc" id="L531">				return new MultinomialLogisticRegression(average_output, config.getInt(&quot;num_class&quot;));</span>
+			default:
+<span class="nc" id="L533">				throw new IllegalArgumentException(objective);</span>
+		}
+	}
+
+	static
+	private String parseObjectiveAlias(String objective){
+
+<span class="pc bpc" id="L540" title="5 of 9 branches missed.">		switch(objective){</span>
+			case &quot;regression&quot;:
+			case &quot;regression_l2&quot;:
+			case &quot;mean_squared_error&quot;:
+			case &quot;mse&quot;:
+			case &quot;l2&quot;:
+			case &quot;l2_root&quot;:
+			case &quot;root_mean_squared_error&quot;:
+			case &quot;rmse&quot;:
+<span class="fc" id="L549">				return &quot;regression&quot;;</span>
+			case &quot;regression_l1&quot;:
+			case &quot;mean_absolute_error&quot;:
+			case &quot;l1&quot;:
+			case &quot;mae&quot;:
+<span class="nc" id="L554">				return &quot;regression_l1&quot;;</span>
+			case &quot;multiclass&quot;:
+			case &quot;softmax&quot;:
+<span class="fc" id="L557">				return &quot;multiclass&quot;;</span>
+			case &quot;multiclassova&quot;:
+			case &quot;multiclass_ova&quot;:
+			case &quot;ova&quot;:
+			case &quot;ovr&quot;:
+<span class="nc" id="L562">				return &quot;multiclassova&quot;;</span>
+			case &quot;xentropy&quot;:
+			case &quot;cross_entropy&quot;:
+<span class="fc" id="L565">				return &quot;cross_entropy&quot;;</span>
+			case &quot;xentlambda&quot;:
+			case &quot;cross_entropy_lambda&quot;:
+<span class="nc" id="L568">				return &quot;cross_entropy_lambda&quot;;</span>
+			case &quot;mean_absolute_percentage_error&quot;:
+			case &quot;mape&quot;:
+<span class="nc" id="L571">				return &quot;mape&quot;;</span>
+			case &quot;none&quot;:
+			case &quot;null&quot;:
+			case &quot;custom&quot;:
+			case &quot;na&quot;:
+<span class="nc" id="L576">				return &quot;custom&quot;;</span>
+			default:
+<span class="fc" id="L578">				return objective;</span>
+		}
+	}
+
+	private Map&lt;String, String&gt; loadFeatureSection(Section section){
+<span class="fc" id="L583">		Map&lt;String, String&gt; result = new LinkedHashMap&lt;&gt;(section);</span>
+
+<span class="fc" id="L585">		(result.keySet()).retainAll(Arrays.asList(this.feature_names_));</span>
+
+<span class="fc" id="L587">		return result;</span>
+	}
+
+	private List&lt;List&lt;Object&gt;&gt; loadPandasCategorical(Section section){
+<span class="fc" id="L591">		String id = section.id();</span>
+
+		try {
+<span class="fc" id="L594">			PandasCategoricalParser parser = new PandasCategoricalParser(id);</span>
+
+<span class="fc" id="L596">			return parser.parsePandasCategorical();</span>
+<span class="nc" id="L597">		} catch(Exception e){</span>
+<span class="nc" id="L598">			throw new IllegalArgumentException(id, e);</span>
+		}
+	}
+
+	static
+	private int skipEndSection(String id, List&lt;Section&gt; sections, int index){
+
+<span class="pc bpc" id="L605" title="1 of 2 branches missed.">		if(index &lt; sections.size()){</span>
+<span class="fc" id="L606">			Section section = sections.get(index);</span>
+
+<span class="pc bpc" id="L608" title="1 of 2 branches missed.">			if(section.checkId(id)){</span>
+<span class="fc" id="L609">				return (index + 1);</span>
+			}
+		}
+
+<span class="nc" id="L613">		return index;</span>
+	}
+
+<span class="fc" id="L616">	private static final Integer CATEGORY_MISSING = -1;</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.6.202009150832</span></div></body></html>
